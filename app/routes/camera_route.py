@@ -1,5 +1,9 @@
 from fastapi import APIRouter
-
+from app.services.handoff import HandoffTracker
+from app.services.global_registry import GlobalTrackRegistry
+from app.services.multi_camera_forecast import MultiCameraForecast
+from app.services.fusion import fusion
+import time
 
 router = APIRouter(
     prefix="/api",
@@ -1348,4 +1352,158 @@ def test_global_id_route_prediction():
 
         "validation":
             validation
+    }
+
+
+@router.get("/multi-camera-forecast")
+def get_multi_camera_forecast(
+    lookback_seconds: int = 300
+):
+    return fusion.get_multi_camera_forecast(
+        lookback_seconds=lookback_seconds
+    )
+
+
+@router.get("/test/multi-camera-forecast")
+def test_multi_camera_forecast():
+    # -------------------------------------------------
+    # Fresh isolated test components
+    # -------------------------------------------------
+
+    test_handoff = HandoffTracker()
+    test_registry = GlobalTrackRegistry()
+
+    forecast = MultiCameraForecast(
+        handoff=test_handoff,
+        global_registry=test_registry
+    )
+
+    now = time.time()
+
+    # -------------------------------------------------
+    # Seed current global occupancy
+    # -------------------------------------------------
+
+    test_registry.register_track(
+        camera_id="camera_1",
+        local_track_id=1
+    )
+
+    test_registry.register_track(
+        camera_id="camera_1",
+        local_track_id=2
+    )
+
+    test_registry.register_track(
+        camera_id="camera_2",
+        local_track_id=3
+    )
+
+    # -------------------------------------------------
+    # Controlled transition history
+    #
+    # camera_1 → camera_2 : 6
+    # camera_1 → camera_3 : 3
+    # camera_2 → camera_3 : 4
+    # -------------------------------------------------
+
+    transitions = []
+
+    for i in range(6):
+        transitions.append({
+            "global_id": 1000 + i,
+            "from_camera": "camera_1",
+            "to_camera": "camera_2",
+            "timestamp": now - 60 + i
+        })
+
+    for i in range(3):
+        transitions.append({
+            "global_id": 1100 + i,
+            "from_camera": "camera_1",
+            "to_camera": "camera_3",
+            "timestamp": now - 45 + i
+        })
+
+    for i in range(4):
+        transitions.append({
+            "global_id": 1200 + i,
+            "from_camera": "camera_2",
+            "to_camera": "camera_3",
+            "timestamp": now - 30 + i
+        })
+
+    test_handoff.route_transitions = transitions
+
+    # -------------------------------------------------
+    # Generate forecast
+    # -------------------------------------------------
+
+    result = forecast.get_summary(
+        lookback_seconds=300
+    )
+
+    # -------------------------------------------------
+    # Validation
+    # -------------------------------------------------
+
+    validation = {
+        "forecast_horizons_present": (
+            "forecast_horizons" in result
+            and all(
+                horizon in result["forecast_horizons"]
+                for horizon in ["30s", "60s", "300s"]
+            )
+        ),
+
+        "camera_forecast_present": all(
+            "camera_forecast" in result["forecast_horizons"][horizon]
+            for horizon in ["30s", "60s", "300s"]
+        ),
+
+        "route_forecast_present": all(
+            "route_forecast" in result["forecast_horizons"][horizon]
+            for horizon in ["30s", "60s", "300s"]
+        ),
+
+        "dominant_route_present": (
+            result.get("dominant_predicted_route") is not None
+        ),
+
+        "network_status_present": (
+            result.get("network_status") is not None
+        ),
+
+        "flow_scope_correct": (
+            result.get("flow_scope")
+            == "INTERNAL_CAMERA_TRANSITIONS"
+        ),
+
+        "observed_transition_count_valid": (
+            result.get("observed_transition_count")
+            == len(transitions)
+        ),
+
+        "transitions_observed": len(transitions)
+    }
+
+    validation["passed"] = all([
+        validation["forecast_horizons_present"],
+        validation["camera_forecast_present"],
+        validation["route_forecast_present"],
+        validation["dominant_route_present"],
+        validation["network_status_present"],
+        validation["flow_scope_correct"],
+        validation["observed_transition_count_valid"]
+    ])
+
+    return {
+        "test": "multi_camera_forecast",
+        "status": (
+            "PASS"
+            if validation["passed"]
+            else "FAIL"
+        ),
+        "validation": validation,
+        "forecast": result
     }
