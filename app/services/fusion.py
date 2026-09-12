@@ -25,7 +25,7 @@ from app.services.reid import reid
 from app.services.handoff import handoff
 from app.services.reid_matcher import (reid_matcher)
 from app.services.merge_engine import merge_engine
-
+from app.services.multi_camera_forecast import (MultiCameraForecast)
 
 class FusionEngine:
     """
@@ -67,6 +67,13 @@ class FusionEngine:
         self.reid = reid
         self.reid_matcher = reid_matcher
         self.handoff = handoff
+
+        self.multi_camera_forecast = (
+            MultiCameraForecast(
+                handoff=self.handoff,
+                global_registry=self.global_registry
+            )
+        )
 
 
         # live frame state
@@ -415,6 +422,18 @@ class FusionEngine:
 
         return self.prediction.get_prediction(
             self.crowd_metrics.get_history()
+        )
+
+    # =====================================
+    # MULTI-CAMERA FORECAST
+    # =====================================
+
+    def get_multi_camera_forecast(
+            self,
+            lookback_seconds=300
+    ):
+        return self.multi_camera_forecast.get_summary(
+            lookback_seconds=lookback_seconds
         )
 
     # =====================================
@@ -812,7 +831,6 @@ class FusionEngine:
         # Trajectory Analytics
         # ---------------------------------
         track = self.trajectory.get_track_summary(track_id)
-
 
         # ---------------------------------
         # Merge analytics from other services
